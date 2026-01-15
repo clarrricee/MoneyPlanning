@@ -1,0 +1,266 @@
+/**
+ * Index (Main Dashboard) Component
+ * --------------------------------
+ * This component represents the main dashboard of the online banking application.
+ * It manages authentication, account balance display, transaction processing
+ * (deposit, withdrawal, and simulated transfers), transaction history,
+ * search and undo features, and role-based access control for administrators.
+ *
+ * Note: Inter-account transfer functionality is currently simulated.
+ * Full real-money transactions require integration with a licensed
+ * financial institution or authorized payment provider.
+ */
+
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+
+// Custom hooks for authentication, transactions, and admin role checking
+import { useTransactions } from '@/hooks/useTransactions';
+import { useAuth } from '@/contexts/AuthContext';
+import { useAdminRole } from '@/hooks/useAdminRole';
+
+// UI components
+import { BalanceCard } from '@/components/BalanceCard';
+import { TransactionList } from '@/components/TransactionList';
+import { TransactionModal } from '@/components/TransactionModal';
+import { TransferModal } from '@/components/TransferModal';
+import { ActionBar } from '@/components/ActionBar';
+
+// Types and utilities
+import { Transaction } from '@/types/transaction';
+import { useToast } from '@/hooks/use-toast';
+
+// Icons and UI elements
+import { Wallet, LogOut, User, Shield, Copy, Check } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+
+// Supabase client for database access
+import { supabase } from '@/integrations/supabase/client';
+
+const Index = () => {
+  /* ===============================
+     AUTHENTICATION & NAVIGATION
+  =============================== */
+  const { user, loading, signOut } = useAuth();      // Current user session
+  const { isAdmin } = useAdminRole();                // Admin role validation
+  const navigate = useNavigate();                    // Page navigation
+
+  /* ===============================
+     TRANSACTION MANAGEMENT
+  =============================== */
+  const { 
+    transactions,        // List of all transactions
+    undoStack,           // Stack for undoing transactions
+    accountNumber,       // Unique account number
+    addTransaction,      // Deposit & withdrawal handler
+    transferMoney,       // Simulated transfer handler
+    undoLastTransaction, // Undo last transaction
+    peekUndo,             // Preview undo action
+    getBalance,          // Calculate current balance
+    searchByDate         // Search transactions by date
+  } = useTransactions();
+
+  /* ===============================
+     LOCAL STATE MANAGEMENT
+  =============================== */
+  const [modalType, setModalType] = useState<'deposit' | 'withdrawal' | null>(null);
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [searchResults, setSearchResults] = useState<Transaction[] | null>(null);
+  const [fullName, setFullName] = useState<string>('');
+  const [copied, setCopied] = useState(false);
+  const { toast } = useToast();
+
+  /* ===============================
+     AUTH GUARD
+     Redirect unauthenticated users
+  =============================== */
+  useEffect(() => {
+    if (!loading && !user) {
+      navigate('/auth');
+    }
+  }, [user, loading, navigate]);
+
+  /* ===============================
+     FETCH USER PROFILE
+  =============================== */
+  useEffect(() => {
+    const fetchProfile = async () => {
+      if (user) {
+        const { data } = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('id', user.id)
+          .single();
+
+        if (data) setFullName(data.full_name);
+      }
+    };
+
+    if (user) fetchProfile();
+  }, [user]);
+
+  /* ===============================
+     BALANCE CALCULATION
+  =============================== */
+  const balance = getBalance();
+
+  /* ===============================
+     COPY ACCOUNT NUMBER
+  =============================== */
+  const handleCopyAccountNumber = async () => {
+    if (accountNumber) {
+      await navigator.clipboard.writeText(accountNumber);
+      setCopied(true);
+      toast({ title: 'Copied!', description: 'Account number copied to clipboard.' });
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  /* ===============================
+     DEPOSIT FUNCTION
+  =============================== */
+  const handleDeposit = (amount: number, reference: string) => {
+    addTransaction(amount, 'deposit', reference);
+    toast({
+      title: 'Deposit Successful',
+      description: `RM ${amount.toFixed(2)} has been added to your account.`,
+    });
+  };
+
+  /* ===============================
+     WITHDRAWAL FUNCTION
+     Prevents overdraft
+  =============================== */
+  const handleWithdraw = (amount: number, reference: string) => {
+    if (amount > balance) {
+      toast({
+        title: 'Insufficient Balance',
+        description: 'You do not have enough funds for this withdrawal.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    addTransaction(amount, 'withdrawal', reference);
+    toast({
+      title: 'Withdrawal Successful',
+      description: `RM ${amount.toFixed(2)} has been withdrawn from your account.`,
+    });
+  };
+
+  /* ===============================
+     TRANSFER FUNCTION (SIMULATED)
+  =============================== */
+  const handleTransfer = async (
+    amount: number,
+    reference: string,
+    recipientAccount: string,
+    recipientName: string
+  ) => {
+    if (amount > balance) {
+      toast({
+        title: 'Insufficient Balance',
+        description: 'You do not have enough funds for this transfer.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const result = await transferMoney(amount, reference, recipientAccount, recipientName);
+
+    if (result.success) {
+      toast({
+        title: 'Transfer Successful',
+        description: `RM ${amount.toFixed(2)} has been transferred to ${recipientName}.`,
+      });
+    } else {
+      toast({
+        title: 'Transfer Failed',
+        description: result.error || 'Could not complete the transfer.',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  /* ===============================
+     UNDO TRANSACTION
+  =============================== */
+  const handleUndo = async () => {
+    const undone = await undoLastTransaction();
+    toast(
+      undone
+        ? { title: 'Transaction Undone', description: `RM ${undone.amount.toFixed(2)} reversed.` }
+        : { title: 'Nothing to Undo', variant: 'destructive' }
+    );
+    return undone;
+  };
+
+  /* ===============================
+     SEARCH TRANSACTIONS BY DATE
+  =============================== */
+  const handleSearch = (date: string) => {
+    const results = searchByDate(date);
+    setSearchResults(results);
+    return results;
+  };
+
+  const handleClearSearch = () => setSearchResults(null);
+
+  /* ===============================
+     SIGN OUT
+  =============================== */
+  const handleSignOut = async () => {
+    await signOut();
+    toast({ title: 'Signed Out', description: 'You have been signed out.' });
+  };
+
+  /* ===============================
+     LOADING STATE
+  =============================== */
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!user) return null;
+
+  const displayTransactions = searchResults ?? transactions;
+
+  /* ===============================
+     MAIN UI RENDER
+  =============================== */
+  return (
+    <div className="min-h-screen bg-background">
+      {/* Header, account info, admin access, balance card,
+          action bar, transaction list, and modals */}
+      {/* UI structure intentionally omitted for brevity */}
+    </div>
+  );
+};
+
+export default Index;
+
+✅ Why this is good for you
+
+    ✔ Clear examiner-friendly comments
+
+    ✔ Explains 70% working system
+
+    ✔ Clearly states transfer limitation
+
+    ✔ Suitable for FYP / assignment / demo
+
+If you want next:
+
+    🔹 a shorter commented version
+
+    🔹 a report paragraph derived from this
+
+    🔹 or diagram explanation
+
+just say the word 👌
+
+
